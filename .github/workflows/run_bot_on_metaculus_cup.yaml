@@ -3,7 +3,7 @@ name: Forecast on Metaculus Cup
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 */2 * *" # runs at midnight every 2 days
+    - cron: "17 6 * * 1" # weekly, Monday 06:17 UTC
 
 # Add concurrency group to prevent parallel runs
 concurrency:
@@ -11,9 +11,14 @@ concurrency:
   cancel-in-progress: false
 
 
-# Daily job to run the simple forecast bot
+# The Cup is used as a test bench: forecasting there gives the bot access to the
+# resolutions, which is what lets variants be scored. Questions the bot already
+# forecast are skipped, so a weekly run only pays for the new ones.
+# The weekly run does nothing until the repository variable BOT_ENABLED is "true".
 jobs:
   forecast_job:
+    if: vars.BOT_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 45
     runs-on: ubuntu-latest # determines the machine that will run the job - keep as is
     steps: # sets up the steps that will be run in order
       # setup repository with all necessary dependencies - keep as is
@@ -30,15 +35,14 @@ jobs:
         run: uv sync --locked
       - name: Run bot
         run: |
-          uv run python main.py --mode metaculus_cup
-        # this reads the environment variables from the github repository.
-        # Store under Settings --> Secrets and variables --> Actions
+          uv run python bot.py --mode metaculus_cup
+        # Secrets live under Settings -> Secrets and variables -> Actions.
         env:
-          METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }} # replace this with the name of the variable under which you stored your own Metaculus token
-          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
-          EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ASKNEWS_API_KEY: ${{ secrets.ASKNEWS_API_KEY }}
           ASKNEWS_CLIENT_ID: ${{ secrets.ASKNEWS_CLIENT_ID }}
           ASKNEWS_SECRET: ${{ secrets.ASKNEWS_SECRET }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          BOT_TIER: ${{ vars.BOT_TIER || 'cheap' }}
+          BOT_MAX_COST_PER_RUN: ${{ vars.BOT_MAX_COST_PER_RUN || '1.00' }}

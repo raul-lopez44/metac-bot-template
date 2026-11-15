@@ -147,6 +147,9 @@ class EnsembleBot(FallTemplateBot2026):
             for model in tier.forecasters
         ]
         self._prediction_counters: dict[int, itertools.count] = {}
+        # Each model's own forecast per question id, kept for the run records:
+        # the published forecast is only the aggregate.
+        self.individual_predictions: dict[int, list[dict[str, Any]]] = {}
         utility = GeneralLlm(model=tier.utility, temperature=0.1, timeout=90, allowed_tries=2)
         kwargs.setdefault("research_reports_per_question", 1)
         kwargs["predictions_per_research_report"] = len(self._forecasters)
@@ -209,6 +212,10 @@ class EnsembleBot(FallTemplateBot2026):
             value, PredictedOptionList
         ):
             value = floor_options(value)
+        key = question.id_of_question or id(question)
+        self.individual_predictions.setdefault(key, []).append(
+            {"model": forecaster.model, "prediction": _serialize_prediction(value, with_cdf=False)}
+        )
         return ReasonedPrediction(
             prediction_value=value,
             reasoning=f"**Forecaster model: {forecaster.model}**\n\n{prediction.reasoning}",
@@ -220,7 +227,7 @@ class EnsembleBot(FallTemplateBot2026):
 # ----------------------------------------------------------------------------
 
 
-def _serialize_prediction(prediction: Any) -> dict[str, Any]:
+def _serialize_prediction(prediction: Any, with_cdf: bool = True) -> dict[str, Any]:
     if isinstance(prediction, (float, int)):
         return {"kind": "binary", "probability": float(prediction)}
     if isinstance(prediction, PredictedOptionList):
@@ -235,6 +242,8 @@ def _serialize_prediction(prediction: Any) -> dict[str, Any]:
                 [p.percentile, p.value] for p in prediction.declared_percentiles
             ],
         }
+        if not with_cdf:
+            return record
         try:
             record["cdf"] = [[p.value, p.percentile] for p in prediction.cdf]
         except Exception as error:  # noqa: BLE001
@@ -274,7 +283,12 @@ def _dry_run_question_ids(save_dir: Path) -> set[int]:
 
 
 def _append_records(
-    path: Path, reports: list[Any], variant: str, tier: Tier, published: bool
+    path: Path,
+    reports: list[Any],
+    variant: str,
+    tier: Tier,
+    published: bool,
+    individual: dict[int, list[dict[str, Any]]] | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as file:
@@ -299,6 +313,8 @@ def _append_records(
                     else None
                 ),
                 "prediction": _serialize_prediction(report.prediction),
+                # One entry per model that produced a usable forecast (ensemble only).
+                "forecasters": (individual or {}).get(question.id_of_question, []),
                 "cost_usd": report.price_estimate,
                 "minutes": report.minutes_taken,
                 "errors": report.errors,
@@ -434,7 +450,14 @@ def main() -> None:
         for variant in variants:
             bot = _build_bot(variant, tier, publish, skip_forecasted)
             reports = await bot.forecast_questions(questions, return_exceptions=True)
-            _append_records(_records_path(save_dir, variant, tier), reports, variant, tier, publish)
+            _append_records(
+                _records_path(save_dir, variant, tier),
+                reports,
+                variant,
+                tier,
+                publish,
+                getattr(bot, "individual_predictions", None),
+            )
             bot.log_report_summary(reports)
             collected.extend(reports)
         return collected

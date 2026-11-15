@@ -58,3 +58,13 @@ jobs:
           BOT_TIER: ${{ vars.BOT_TIER || 'cheap' }}
           # The bot stops calling models once one run has spent this many USD.
           BOT_MAX_COST_PER_RUN: ${{ vars.BOT_MAX_COST_PER_RUN || '0.60' }}
+      # The runner is discarded after the job, so the forecast records (one line
+      # per question, with each model's own forecast) are kept as an artifact.
+      - name: Keep forecast records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runs-${{ github.run_id }}
+          path: runs/
+          if-no-files-found: ignore
+          retention-days: 90
